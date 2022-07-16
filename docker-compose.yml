@@ -2,7 +2,6 @@ version: "3"
 networks:
   main:
 
-project_name: jitsu
 services:
   jitsu:
     container_name: jitsu
