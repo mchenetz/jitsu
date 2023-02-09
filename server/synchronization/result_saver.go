@@ -24,8 +24,8 @@ import (
 	"time"
 )
 
-//ResultSaver is a Singer/Airbyte result consumer
-//tap is a Singer tap or Airbyte source docker image
+// ResultSaver is a Singer/Airbyte result consumer
+// tap is a Singer tap or Airbyte source docker image
 type ResultSaver struct {
 	task              *meta.Task
 	tap               string
@@ -39,7 +39,7 @@ type ResultSaver struct {
 	configPath       string
 }
 
-//NewResultSaver returns configured ResultSaver instance
+// NewResultSaver returns configured ResultSaver instance
 func NewResultSaver(task *meta.Task, tap, collectionMetaKey, tableNamePrefix string, taskLogger *TaskLogger, destinations []storages.Storage, metaStorage meta.Storage, streamTableNames map[string]string, configPath string) *ResultSaver {
 	return &ResultSaver{
 		task:              task,
@@ -54,7 +54,7 @@ func NewResultSaver(task *meta.Task, tap, collectionMetaKey, tableNamePrefix str
 	}
 }
 
-//Consume consumes result batch and writes it to destinations and saves the State
+// Consume consumes result batch and writes it to destinations and saves the State
 func (rs *ResultSaver) Consume(representation *driversbase.CLIOutputRepresentation) error {
 	for _, stream := range representation.GetStreams() {
 		streamName := stream.StreamName
@@ -88,6 +88,7 @@ func (rs *ResultSaver) Consume(representation *driversbase.CLIOutputRepresentati
 		uniqueIDField := rs.destinations[0].GetUniqueIDField()
 		stream.BatchHeader.Fields[uniqueIDField.GetFlatFieldName()] = schema.NewField(typing.STRING)
 		stream.BatchHeader.Fields[events.SrcKey] = schema.NewField(typing.STRING)
+		stream.BatchHeader.Fields[events.SourceIDKey] = schema.NewField(typing.STRING)
 		stream.BatchHeader.Fields[timestamp.Key] = schema.NewField(typing.TIMESTAMP)
 
 		for _, object := range stream.Objects {
@@ -96,6 +97,7 @@ func (rs *ResultSaver) Consume(representation *driversbase.CLIOutputRepresentati
 			if _, ok := object[timestamp.Key]; !ok {
 				object[timestamp.Key] = timestamp.NowUTC()
 			}
+			events.EnrichWithSourceId(object, rs.task.Source)
 
 			//calculate eventID from key fields or whole object
 			var eventID string
@@ -130,19 +132,16 @@ func (rs *ResultSaver) Consume(representation *driversbase.CLIOutputRepresentati
 			batchLoadTime := timestamp.Now().Sub(batchStart)
 			var replaceTableTime time.Duration
 			if err == nil {
-				replaceTableText := ""
-				if replaceTableTime > 0 {
-					replaceTableText = fmt.Sprintf(" Replace table time: %s", replaceTableTime.String())
-				}
-				rs.taskLogger.INFO("Stream [%s] %d objects stored to [%s]. Columns count: %d. Time: %s, Rows/sec: %.2f. Storage=[%s]%s", streamName, rowsCount, tableName, len(stream.Objects[0]), batchLoadTime.Round(time.Millisecond), float64(rowsCount)/batchLoadTime.Seconds(), storage.ID(), replaceTableText)
+				rs.taskLogger.INFO("Stream [%s] %d objects stored to [%s]. Columns count: %d. Time: %s, Rows/sec: %.2f. Storage=[%s]", streamName, rowsCount, tableName, len(stream.Objects[0]), batchLoadTime.Round(time.Millisecond), float64(rowsCount)/batchLoadTime.Seconds(), storage.ID())
 				if stream.SwapWithIntermediateTable && targetTableName != tableName {
-					batchStart := timestamp.Now()
+					replaceStart := timestamp.Now()
 					rs.taskLogger.INFO("Stream [%s] Replacing final table: [%s] with content of: [%s]", streamName, targetTableName, tableName)
-					replaceTableTime = timestamp.Now().Sub(batchStart)
 					err = storage.ReplaceTable(targetTableName, tableName, true)
 					if errorx.IsOfType(err, errorj.DropError) {
 						err = storage.ReplaceTable(targetTableName, tableName, false)
 					}
+					replaceTableTime = timestamp.Now().Sub(replaceStart)
+					rs.taskLogger.INFO("Stream [%s] Replace table time: %s", streamName, replaceTableTime.String())
 				}
 			}
 			if err != nil {
@@ -184,7 +183,7 @@ func (rs *ResultSaver) Consume(representation *driversbase.CLIOutputRepresentati
 	return nil
 }
 
-//CleanupAfterError do cleanup if necessary. Like deleting temporary tables after errors
+// CleanupAfterError do cleanup if necessary. Like deleting temporary tables after errors
 func (rs *ResultSaver) CleanupAfterError(representation *driversbase.CLIOutputRepresentation) {
 	if representation == nil {
 		return

@@ -69,6 +69,9 @@ func MapConfig(destinationID string, destination *entities.Destination, defaultS
 		//transform is implicitly enabled. pass only expilicit disabled values
 		config.DataLayout.TransformEnabled = destination.TransformEnabled
 	}
+	if destination.StreamingThreadsCount > 0 {
+		config.StreamingThreadsCount = destination.StreamingThreadsCount
+	}
 	config.DataLayout.Transform = destination.Transform
 	setEnrichmentRules(destination, config)
 
@@ -655,7 +658,8 @@ func mapAmplitude(aDestination *entities.Destination) (*enconfig.DestinationConf
 	}
 
 	cfg := &enadapters.AmplitudeConfig{
-		APIKey: aFormData.APIKey,
+		APIKey:   aFormData.APIKey,
+		Endpoint: aFormData.Endpoint,
 	}
 	cfgMap := map[string]interface{}{}
 	err = mapstructure.Decode(cfg, &cfgMap)
@@ -685,8 +689,9 @@ func mapHubSpot(hDestination *entities.Destination) (*enconfig.DestinationConfig
 	}
 
 	cfg := &enadapters.HubSpotConfig{
-		APIKey: hFormData.APIKey,
-		HubID:  hFormData.HubID,
+		AccessToken: hFormData.AccessToken,
+		APIKey:      hFormData.APIKey,
+		HubID:       hFormData.HubID,
 	}
 	cfgMap := map[string]interface{}{}
 	err = mapstructure.Decode(cfg, &cfgMap)

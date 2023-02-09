@@ -30,6 +30,7 @@ var (
 type Options struct {
 	DefaultDialConnectTimeout time.Duration
 	DefaultDialReadTimeout    time.Duration
+	DefaultDialWriteTimeout   time.Duration
 
 	MaxIdle     int
 	MaxActive   int
@@ -41,10 +42,12 @@ type Options struct {
 var DefaultOptions = Options{
 	DefaultDialConnectTimeout: 10 * time.Second,
 	DefaultDialReadTimeout:    10 * time.Second,
-	MaxIdle:                   100,
-	MaxActive:                 600,
-	IdleTimeout:               240 * time.Second,
-	PingTimeout:               30 * time.Second,
+	DefaultDialWriteTimeout:   10 * time.Second,
+
+	MaxIdle:     100,
+	MaxActive:   600,
+	IdleTimeout: 240 * time.Second,
+	PingTimeout: 30 * time.Second,
 }
 
 //RedisPoolFactory is a factory for creating RedisPool
@@ -54,6 +57,7 @@ type RedisPoolFactory struct {
 	host               string
 	port               int
 	password           string
+	database           int
 	sentinelMasterName string
 	tlsSkipVerify      bool
 
@@ -61,7 +65,7 @@ type RedisPoolFactory struct {
 }
 
 //NewRedisPoolFactory returns filled RedisPoolFactory and removes quotes in host
-func NewRedisPoolFactory(host string, port int, password string, tlsSkipVerify bool, sentinelMasterMame string) *RedisPoolFactory {
+func NewRedisPoolFactory(host string, port int, password string, database int, tlsSkipVerify bool, sentinelMasterMame string) *RedisPoolFactory {
 	host = strings.TrimPrefix(host, `"`)
 	host = strings.TrimPrefix(host, `'`)
 	host = strings.TrimSuffix(host, `"`)
@@ -71,6 +75,7 @@ func NewRedisPoolFactory(host string, port int, password string, tlsSkipVerify b
 		host:               host,
 		port:               port,
 		password:           password,
+		database:           database,
 		tlsSkipVerify:      tlsSkipVerify,
 		sentinelMasterName: sentinelMasterMame,
 		options:            DefaultOptions,
@@ -143,8 +148,12 @@ func (rpf *RedisPoolFactory) Create() (*RedisPool, error) {
 func (rpf *RedisPoolFactory) getSentinelAndDialFunc() (*sentinel.Sentinel, func() (redis.Conn, error), error) {
 	defaultDialConnectTimeout := redis.DialConnectTimeout(rpf.options.DefaultDialConnectTimeout)
 	defaultDialReadTimeout := redis.DialReadTimeout(rpf.options.DefaultDialReadTimeout)
+	defaultDialWriteTimeout := redis.DialWriteTimeout(rpf.options.DefaultDialWriteTimeout)
 
-	options := []redis.DialOption{defaultDialConnectTimeout, defaultDialReadTimeout}
+	options := []redis.DialOption{defaultDialConnectTimeout, defaultDialReadTimeout, defaultDialWriteTimeout}
+	if rpf.database > 0 {
+		options = append(options, redis.DialDatabase(rpf.database))
+	}
 
 	// 1. redis:// redis://
 	if rpf.isURL() || rpf.isSecuredURL() {

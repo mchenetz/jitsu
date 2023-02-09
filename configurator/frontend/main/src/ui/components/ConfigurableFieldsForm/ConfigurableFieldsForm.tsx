@@ -13,7 +13,7 @@ import { FormValues as DebuggerFormValues } from "ui/components/CodeDebugger/Cod
 // @Services
 import ApplicationServices from "lib/services/ApplicationServices"
 // @Types
-import { Parameter, ParameterType } from "@jitsu/catalog"
+import { Parameter, ParameterType, singleSelectionType } from "@jitsu/catalog"
 import { FormInstance } from "antd/lib/form/hooks/useForm"
 // @Utils
 import { makeObjectFromFieldsValues } from "utils/forms/marshalling"
@@ -31,6 +31,11 @@ import { SwitchWithLabel } from "./SwitchWithLabel"
 import set from "lodash/set"
 import { InputWithUpload } from "./InputWithUpload"
 import { useHistory, useLocation } from "react-router-dom"
+import useProject from "../../../hooks/useProject"
+import { allPermissions } from "../../../lib/services/permissions"
+import { ProjectPermission } from "../../../generated/conf-openapi"
+
+export const IMAGE_VERSION_FIELD_ID = "config.image_version"
 
 /**
  * @param loading if `true` shows loader instead of the fields.
@@ -85,6 +90,9 @@ const ConfigurableFieldsFormComponent = ({
     [form]
   )
 
+  const project = useProject();
+  const disableEdit = !(project.permissions || allPermissions).includes(ProjectPermission.MODIFY_CONFIG);
+
   const handleChangeTextInput = useCallback(
     (id: string) => (value: string) => {
       form.setFieldsValue({ [id]: value })
@@ -136,7 +144,7 @@ const ConfigurableFieldsFormComponent = ({
     }
 
     let calcValue: any
-    if (typeof defaultValue !== "undefined") {
+    if (typeof defaultValue !== "undefined" && defaultValue !== null) {
       calcValue = defaultValue
     } else if (typeof constantValue !== "undefined") {
       calcValue = constantValue
@@ -150,6 +158,12 @@ const ConfigurableFieldsFormComponent = ({
       calcValue = "<script>\n</script>"
     } else if (type.indexOf("array/") === 0) {
       calcValue = []
+    } else if (type === "string") {
+      if (defaultValue === null) {
+        calcValue = undefined
+      } else {
+        calcValue = ""
+      }
     } else {
       calcValue = ""
     }
@@ -169,6 +183,7 @@ const ConfigurableFieldsFormComponent = ({
     documentation?: React.ReactNode,
     validationRules?: FormItemProps["rules"]
   ) => {
+
     const defaultValueToDisplay =
       form.getFieldValue(id) ?? getInitialValue(id, defaultValue, constantValue, type?.typeName)
     form.setFieldsValue({ ...form.getFieldsValue(), [id]: defaultValueToDisplay })
@@ -205,23 +220,36 @@ const ConfigurableFieldsFormComponent = ({
       }
 
       case "selection": {
-        return (
-          <FormItemWrapper key={id} {...formItemWrapperProps}>
-            <Select
-              allowClear
-              mode={type.data.maxOptions > 1 ? "multiple" : undefined}
-              onChange={() => forceUpdateTheTarget("select")}
-            >
-              {type.data.options.map(({ id, displayName }: Option) => {
-                return (
-                  <Select.Option value={id} key={id}>
-                    {displayName}
-                  </Select.Option>
-                )
+        if (id === IMAGE_VERSION_FIELD_ID) {
+          return (
+            <VersionSelection
+              key={`Stream Version Selection`}
+              displayName={displayName}
+              defaultValue={defaultValue}
+              options={type.data.options.map(({ id }: Option) => {
+                return id
               })}
-            </Select>
-          </FormItemWrapper>
-        )
+            />
+          )
+        } else {
+          return (
+            <FormItemWrapper key={id} {...formItemWrapperProps}>
+              <Select
+                allowClear
+                mode={type.data.maxOptions > 1 ? "multiple" : undefined}
+                onChange={() => forceUpdateTheTarget("select")}
+              >
+                {type.data.options.map(({ id, displayName }: Option) => {
+                  return (
+                    <Select.Option value={id} key={id}>
+                      {displayName}
+                    </Select.Option>
+                  )
+                })}
+              </Select>
+            </FormItemWrapper>
+          )
+        }
       }
       case "array/string":
         return (
@@ -235,6 +263,7 @@ const ConfigurableFieldsFormComponent = ({
         return (
           <FormItemWrapper key={id} {...formItemWrapperProps}>
             <CodeEditor
+              readonly={disableEdit}
               initialValue={defaultValueToDisplay}
               className={styles.codeEditor}
               extraSuggestions={codeSuggestions}
@@ -242,7 +271,7 @@ const ConfigurableFieldsFormComponent = ({
               handleChange={handleJsonChange(id)}
             />
             <span className="z-50">
-              {jsDebugger && (
+              {(jsDebugger && !disableEdit) && (
                 <>
                   {bigField ? (
                     <Button
@@ -319,7 +348,7 @@ const ConfigurableFieldsFormComponent = ({
             <InputWithDebug
               id={id}
               placeholder={placeholder}
-              jsDebugger={jsDebugger}
+              jsDebugger={disableEdit ? null : jsDebugger}
               onButtonClick={() => handleOpenDebugger(id)}
             />
           </FormItemWrapper>
@@ -341,7 +370,7 @@ const ConfigurableFieldsFormComponent = ({
 
     const data = {
       reformat: debuggerType == "string",
-      uid: initialValues._uid,
+      uid: `${services.activeProject.id}.${initialValues._uid}`,
       type: initialValues._type,
       field: field,
       expression: values.code,
@@ -401,10 +430,10 @@ const ConfigurableFieldsFormComponent = ({
       const initialValue = getInitialValue(id, param.defaultValue, constantValue, param.type?.typeName)
 
       if (fieldNeeded) {
-        formValues[id] = initialValue
+        formValues[id] = form.getFieldValue(id) || initialValue
         formFields.push({
           name: id,
-          value: initialValue,
+          value: form.getFieldValue(id) || initialValue,
           touched: false,
         })
       }
@@ -573,5 +602,46 @@ export const FormItemWrapper: React.FC<FormItemWrapperProps> = ({
     >
       {children}
     </Form.Item>
+  )
+}
+
+type VersionSelectionProps = {
+  displayName: string
+  defaultValue?: string
+  options: string[]
+}
+
+const VersionSelection: React.FC<VersionSelectionProps> = ({ displayName, defaultValue, options }) => {
+  const [selectedVersion, setSelectedVersion] = useState<string>(defaultValue || options[0])
+  const isLatestVersionSelected = selectedVersion === options[0]
+  const handleChange = useCallback<(value: string) => void>(version => {
+    setSelectedVersion(version)
+  }, [])
+  return (
+    <FormItemWrapper
+      id={IMAGE_VERSION_FIELD_ID}
+      name={IMAGE_VERSION_FIELD_ID}
+      displayName={displayName}
+      type={singleSelectionType(options)}
+      required={true}
+      initialValue={selectedVersion}
+      // help={!isLatestVersionSelected && <span className={`text-xs text-success`}>{"New version available!"}</span>}
+    >
+      <Select value={selectedVersion} onChange={handleChange}>
+        {options.map(option => {
+          return (
+            <Select.Option value={option} key={option}>
+              {option === selectedVersion && !isLatestVersionSelected ? (
+                <span>
+                  {option} <span className={`text-secondaryText`}>{"(New version available)"}</span>
+                </span>
+              ) : (
+                option
+              )}
+            </Select.Option>
+          )
+        })}
+      </Select>
+    </FormItemWrapper>
   )
 }

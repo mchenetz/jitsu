@@ -5,6 +5,7 @@ import { DestinationsUtils } from "../../../utils/destinations.utils"
 import { destinationsReferenceMap } from "@jitsu/catalog"
 
 export type DestinationPickerProps = {
+  disabled?: boolean
   isSelected: (dst: DestinationData) => boolean
   allDestinations: DestinationData[]
 
@@ -14,6 +15,7 @@ export type DestinationPickerProps = {
 const DestinationPickerComponent: React.FC<DestinationPickerProps> = props => {
   return (
     <Select
+      disabled={!!props.disabled}
       mode="multiple"
       allowClear
       placeholder="Please select destinations to connect with the key"
@@ -30,7 +32,7 @@ const DestinationPickerComponent: React.FC<DestinationPickerProps> = props => {
               <span className="w-6 h-6">{destinationsReferenceMap[dst._type]?.ui?.icon}</span>
             )}
             <span>
-              {DestinationsUtils.getDisplayName(dst)} ({destinationsReferenceMap[dst._type].displayName})
+              {DestinationsUtils.getDisplayName(dst)} ({destinationsReferenceMap[dst._type]?.displayName})
             </span>
           </div>
         </Select.Option>

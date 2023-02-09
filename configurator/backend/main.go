@@ -236,6 +236,9 @@ func main() {
 		customDomainProcessor, err := ssl.NewCertificateService(sshClient, jitsuConfig.SSL.Hosts, configurationsService, jitsuConfig.SSL.ServerConfigTemplate, jitsuConfig.SSL.NginxConfigPath, jitsuConfig.SSL.AcmeChallengePath)
 
 		sslUpdateExecutor = ssl.NewSSLUpdateExecutor(customDomainProcessor, jitsuConfig.SSL.Hosts, jitsuConfig.SSL.SSH.User, jitsuConfig.SSL.SSH.PrivateKeyPath, jitsuConfig.CName, jitsuConfig.SSL.CertificatePath, jitsuConfig.SSL.PKPath, jitsuConfig.SSL.AcmeChallengePath)
+	} else {
+		customDomainProcessor, _ := ssl.NewCertificateService(nil, nil, configurationsService, "", "", "")
+		sslUpdateExecutor = ssl.NewSSLUpdateExecutor(customDomainProcessor, nil, "", "", "", "", "", "")
 	}
 
 	cors.Init(viper.GetString("server.domain"), viper.GetStringSlice("server.allowed_domains"))
@@ -340,8 +343,10 @@ func newAuthorizator(ctx context.Context, vp *viper.Viper, mailSender authorizat
 		port := vp.GetInt("auth.redis.port")
 		sentinelMaster := vp.GetString("auth.redis.sentinel_master_name")
 		redisPassword := vp.GetString("auth.redis.password")
+		redisDatabase := vp.GetInt("auth.redis.database")
+
 		tlsSkipVerify := vp.GetBool("auth.redis.tls_skip_verify")
-		redisPoolFactory := meta.NewRedisPoolFactory(host, port, redisPassword, tlsSkipVerify, sentinelMaster)
+		redisPoolFactory := meta.NewRedisPoolFactory(host, port, redisPassword, redisDatabase, tlsSkipVerify, sentinelMaster)
 		if defaultPort, ok := redisPoolFactory.CheckAndSetDefaultPort(); ok {
 			logging.Infof("auth.redis.port isn't configured. Will be used default: %d", defaultPort)
 		}
@@ -411,6 +416,14 @@ func SetupRouter(jitsuService *jitsu.Service, configurationsService *storages.Co
 	})
 	router.Any("/proxy/*path", authenticatorMiddleware.ManagementWrapper(proxyHandler.Handler))
 
+	router.Any("/check_domain", authenticatorMiddleware.ManagementWrapper(func(c *gin.Context) {
+		if sslUpdateExecutor.CheckDomain(c.Query("domain")) {
+			c.Status(http.StatusOK)
+		} else {
+			c.Status(http.StatusForbidden)
+		}
+	}))
+
 	// ** OLD API (delete after migrating UI to api/v2) **
 	jConfigurationsHandler := handlers.NewConfigurationsHandler(configurationsService)
 	apiV1 := router.Group("/api/v1")
@@ -427,11 +440,12 @@ func SetupRouter(jitsuService *jitsu.Service, configurationsService *storages.Co
 		SSOProvider:    ssoProvider,
 		Configurations: configurationsService,
 		SystemConfig: &handlers.SystemConfiguration{
-			SMTP:        emailService.IsConfigured(),
-			SelfHosted:  isSelfHosted,
-			DockerHUBID: *dockerHubID,
-			Tag:         tag,
-			BuiltAt:     builtAt,
+			SMTP:            emailService.IsConfigured(),
+			ServerPublicURL: viper.GetString("jitsu.server_public_url"),
+			SelfHosted:      isSelfHosted,
+			DockerHUBID:     *dockerHubID,
+			Tag:             tag,
+			BuiltAt:         builtAt,
 		},
 		JitsuService:   jitsuService,
 		UpdateExecutor: sslUpdateExecutor,
@@ -453,10 +467,12 @@ func initializeStorage(vp *viper.Viper) (storages.ConfigurationsStorage, *meta.R
 
 		port := vp.GetInt("storage.redis.port")
 		password := vp.GetString("storage.redis.password")
+		database := vp.GetInt("storage.redis.database")
+
 		tlsSkipVerify := vp.GetBool("storage.redis.tls_skip_verify")
 		sentinelMaster := vp.GetString("storage.redis.sentinel_master_name")
 
-		redisPoolFactory := meta.NewRedisPoolFactory(host, port, password, tlsSkipVerify, sentinelMaster)
+		redisPoolFactory := meta.NewRedisPoolFactory(host, port, password, database, tlsSkipVerify, sentinelMaster)
 		if defaultPort, ok := redisPoolFactory.CheckAndSetDefaultPort(); ok {
 			logging.Infof("storage.redis.port isn't configured. Will be used default: %d", defaultPort)
 		}

@@ -13,6 +13,9 @@ import styles from "./DestinationEditor.module.less"
 import { destinationsReferenceMap } from "@jitsu/catalog"
 import { CodeSnippet } from "../../../../../lib/components/components"
 import { camelCase } from "lodash"
+import useProject from "../../../../../hooks/useProject"
+import { allPermissions } from "../../../../../lib/services/permissions"
+import { ProjectPermission } from "../../../../../generated/conf-openapi"
 
 export interface Props {
   destinationData: DestinationData
@@ -31,6 +34,8 @@ const DestinationEditorTransform = ({
   mappingForm,
   handleTouchAnyField,
 }: Props) => {
+  const project = useProject();
+  const disableEdit = !(project.permissions || allPermissions).includes(ProjectPermission.MODIFY_CONFIG);
   const handleChange = debounce(handleTouchAnyField, 500)
   const [documentationVisible, setDocumentationVisible] = useState(false)
   const templateVarsSuggestions = Object.entries(configForm.getFieldsValue())
@@ -53,7 +58,7 @@ const DestinationEditorTransform = ({
           <b>Transform</b> effectively replaces <b>Mappings</b> – both features cannot work together.
         </p>
       </TabDescription>
-      <Form name="destination-config" form={form} autoComplete="off" onChange={handleChange}>
+      <Form disabled={disableEdit} name="destination-config" form={form} autoComplete="off" onChange={handleChange}>
         <ConfigurableFieldsForm
           handleTouchAnyField={handleTouchAnyField}
           fieldsParamsList={[
@@ -63,7 +68,7 @@ const DestinationEditorTransform = ({
               defaultValue: !destinationData._mappings?._mappings,
               required: false,
               omitFieldRule: cfg =>
-                destinationsReferenceMap[destinationData._type].defaultTransform.length > 0 &&
+                destinationsReferenceMap[destinationData._type].defaultTransform &&
                 !destinationData._mappings?._mappings,
               type: booleanType,
               validator: (rule, value) => {
@@ -80,12 +85,22 @@ const DestinationEditorTransform = ({
               id: "_transform",
               codeSuggestions: `${templateVarsSuggestions}declare const destinationId = "${destinationData._uid}";
 declare const destinationType = "${destinationData._type}";
+declare type KeyValue = {
+  get(key: string): Promise<any>
+  del(key: string): Promise<void>
+  set(key: string, value: any, opts?: {ttlMs?: number}|{ttlSec?: number}): Promise<void>
+}
+declare const $kv:KeyValue
+declare type Context = typeof $.__HTTP_CONTEXT__ & {
+  header(name: string): string
+}
+declare const $context:Context = $.__HTTP_CONTEXT__
 ${[destinationData._type, "segment"]
   .map(type => `declare function ${camelCase("to_" + type)}(event: object): object`)
   .join("\n")}`,
               displayName: "Javascript Transformation",
               defaultValue: !destinationData._mappings?._mappings
-                ? destinationsReferenceMap[destinationData._type].defaultTransform
+                ? destinationsReferenceMap[destinationData._type].defaultTransform ?? ""
                 : "",
               required: false,
               jsDebugger: "object",

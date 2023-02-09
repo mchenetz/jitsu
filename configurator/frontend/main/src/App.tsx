@@ -4,6 +4,7 @@ import { Redirect, Route, Switch, useLocation, NavLink } from "react-router-dom"
 import { Button, Card, Typography } from "antd"
 import { useParams } from "react-router"
 import moment from "moment"
+import { JitsuProvider } from "@jitsu/jitsu-react"
 // @Services
 import ApplicationServices from "./lib/services/ApplicationServices"
 import { CurrentSubscription, getCurrentSubscription, paymentPlans } from "lib/services/billing"
@@ -28,7 +29,7 @@ import { useServices } from "./hooks/useServices"
 // @Utils
 import { createError, reloadPage, setDebugInfo } from "./lib/commons/utils"
 // @Types
-import { Project } from "./generated/conf-openapi"
+import { Project, ProjectWithPermissions } from "./generated/conf-openapi"
 // @Pages
 import LoginPage from "./ui/pages/GetStartedPage/LoginPage"
 import SignupPage from "./ui/pages/GetStartedPage/SignupPage"
@@ -104,7 +105,10 @@ const initializeBilling = async (services: ApplicationServices, projectId: strin
   services.currentSubscription = currenSubscription
 }
 
-const initializeProject = async (projectId: string, projects: Project[]): Promise<Project | null> => {
+const initializeProject = async (
+  projectId: string,
+  projects: ProjectWithPermissions[]
+): Promise<ProjectWithPermissions | null> => {
   const project = projects.find(project => project.id === projectId) ?? null
   if (project) {
     const services = ApplicationServices.get()
@@ -189,71 +193,88 @@ export const Application: React.FC = function () {
       </div>
     )
   }
-
+  const user = services.userService.hasUser() ? services.userService.getUser() : undefined
+  const jitsuHost = services.applicationConfiguration.rawConfig.keys.jitsu
+  const identifyHook = {
+    effect: function (analytics) {
+      if (user && user.id) {
+        analytics.identify(user.id, { name: user.name, email: user.email })
+      }
+    },
+    deps: [user],
+  }
   if (!services.userService.hasUser()) {
     return (
       <React.Suspense fallback={<CenteredSpin />}>
-        {services.showSelfHostedSignUp() && <SetupForm />}
-        {!services.showSelfHostedSignUp() && (
-          <Switch>
-            <Route
-              key="login"
-              path="/login-link/:emailEncoded?"
-              exact
-              render={pageOf(LoginLink, { pageTitle: "Jitsu : Sign In with magic link" })}
-            />
-            <Route
-              key="signin"
-              path={["/", "/dashboard", "/login", "/signin"]}
-              exact
-              render={pageOf(LoginPage, { pageTitle: "Jitsu : Sign In" })}
-            />
-            <Route
-              key="signup"
-              path={["/register", "/signup"]}
-              exact
-              render={pageOf(SignupPage, { pageTitle: "Jitsu : Sign Up" })}
-            />
-            <Route
-              key="reset"
-              path={["/reset_password/:resetId"]}
-              exact
-              render={pageOf(ChangePasswordOnResetForm, { pageTitle: "Jitsu : Reset Password" })}
-            />
-            <Redirect to="/" />
-          </Switch>
-        )}
+        <JitsuProvider
+          options={{ host: jitsuHost, autoPageTracking: { reactRouter: useLocation }, before: identifyHook }}
+        >
+          {services.showSelfHostedSignUp() && <SetupForm />}
+          {!services.showSelfHostedSignUp() && (
+            <Switch>
+              <Route
+                key="login"
+                path="/login-link/:emailEncoded?"
+                exact
+                render={pageOf(LoginLink, { pageTitle: "Jitsu: Sign In with magic link" })}
+              />
+              <Route
+                key="signin"
+                path={["/", "/dashboard", "/login", "/signin"]}
+                exact
+                render={pageOf(LoginPage, { pageTitle: "Jitsu: Sign In" })}
+              />
+              <Route
+                key="signup"
+                path={["/register", "/signup"]}
+                exact
+                render={pageOf(SignupPage, { pageTitle: "Jitsu: Sign Up" })}
+              />
+              <Route
+                key="reset"
+                path={["/reset_password/:resetId"]}
+                exact
+                render={pageOf(ChangePasswordOnResetForm, { pageTitle: "Jitsu: Reset Password" })}
+              />
+              <Redirect to="/" />
+            </Switch>
+          )}
+        </JitsuProvider>
       </React.Suspense>
     )
   }
 
   return (
     <>
-      <Switch>
-        <Route
-          path={"/user/settings"}
-          exact={true}
-          render={() => (
-            <div className="flex flex-row justify-center pt-12 w-full">
-              <div className="w-1/2">
-                <NavLink to="/">
-                  <Button size="large" type="primary">
-                    ← Back to Jitsu
-                  </Button>
-                </NavLink>
+      <JitsuProvider
+        options={{ host: jitsuHost, autoPageTracking: { reactRouter: useLocation }, before: identifyHook }}
+      >
+        <Switch>
+          <Route
+            path={"/user/settings"}
+            exact={true}
+            render={() => (
+              <div className="flex flex-row justify-center pt-12 w-full">
+                <div className="w-1/2">
+                  <NavLink to="/">
+                    <Button size="large" type="primary">
+                      ← Back to Jitsu
+                    </Button>
+                  </NavLink>
 
-                <UserSettings />
+                  <UserSettings />
+                </div>
               </div>
-            </div>
-          )}
-        />
-        <Route path={"/prj-:projectId"} exact={false}>
-          <ProjectRoute projects={projects} />
-        </Route>
-        <Route>
-          <ProjectRedirect projects={projects} />
-        </Route>
-      </Switch>
+            )}
+          />
+          <Route path={"/prj-:projectId"} exact={false}>
+            <ProjectRoute projects={projects} />
+          </Route>
+          <Route>
+            <ProjectRedirect projects={projects} />
+          </Route>
+        </Switch>
+      </JitsuProvider>
     </>
   )
 }
@@ -335,7 +356,7 @@ const PageWrapper: React.FC<{ pageTitle: string; component: ComponentType; pageP
     services.analyticsService.onPageLoad({
       pagePath: pagePath,
     })
-    document["title"] = `Jitsu : ${pageTitle}`
+    document["title"] = `Jitsu: ${pageTitle}`
     currentPageHeaderStore.setBreadcrumbs(pageTitle)
   }, [])
   const Component = component as ExoticComponent
@@ -358,7 +379,9 @@ const ProjectRoute: React.FC<{ projects: Project[] }> = ({ projects }) => {
     ;(async () => {
       let project = await initializeProject(projectId, projects)
       if (!project) {
-        if (!projects || projects.length === 0) services.userService.removeAuth(reloadPage)
+        if (!projects || projects.length === 0) {
+          services.userService.removeAuth(reloadPage)
+        }
         const lastUsedProject = services.userSettingsService.get(Settings.ActiveProject)?.id || projects[0]?.id
         setProjectIdRedirectedFrom(projectId)
         window.location.replace(window.location.href.replace(projectId, lastUsedProject))

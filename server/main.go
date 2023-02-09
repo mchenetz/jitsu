@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/jitsucom/jitsu/server/script"
 	"math/rand"
 	"net/http"
 	"os"
@@ -56,12 +57,11 @@ import (
 	"github.com/jitsucom/jitsu/server/telemetry"
 	"github.com/jitsucom/jitsu/server/timestamp"
 	"github.com/jitsucom/jitsu/server/users"
-	"github.com/jitsucom/jitsu/server/uuid"
 	"github.com/jitsucom/jitsu/server/wal"
 	"github.com/spf13/viper"
 )
 
-//some inner parameters
+// some inner parameters
 const (
 	//incoming.tok=$token-$timestamp.log
 	uploaderFileMask = "incoming.tok=*-20*.log"
@@ -170,6 +170,8 @@ func main() {
 	if err != nil {
 		logging.Fatalf("Error initializing meta storage: %v", err)
 	}
+	telemetry.EnrichMetaStorage(metaStorage)
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// ** Coordination Service **
@@ -220,7 +222,7 @@ func main() {
 		notifications.SystemErrorf("Panic:\n%s\n%s", value, string(debug.Stack()))
 	}
 
-	clusterID := metaStorage.GetOrCreateClusterID(uuid.New())
+	clusterID := metaStorage.GetOrCreateClusterID()
 	systemInfo := runtime.GetInfo()
 	telemetry.EnrichSystemInfo(clusterID, systemInfo)
 
@@ -353,8 +355,12 @@ func main() {
 		globalRecognitionConfiguration.PoolSize = 1
 		logging.Infof("users_recognition.pool.size can't be 0. Using default value=1 instead")
 	}
+	transformStorage, err := script.InitializeStorage(true, metaStorageConfiguration)
+	if err != nil {
+		logging.Fatalf("Error initializing transform key value storage: %v", err)
+	}
 
-	scriptFactory, err := node.NewFactory(viper.GetInt("node.pool_size"), viper.GetInt("node.max_space"))
+	scriptFactory, err := node.NewFactory(viper.GetInt("node.pool_size"), viper.GetInt("node.max_space"), transformStorage)
 	if err != nil {
 		logging.Warn(err)
 	} else {
@@ -363,9 +369,14 @@ func main() {
 	}
 
 	maxColumns := viper.GetInt("server.max_columns")
+	defaultStreamingThreadsCount := viper.GetInt("streaming.threads_count")
+	if defaultStreamingThreadsCount <= 0 {
+		logging.Warnf("streaming.threads_count cannot be less than 1. Got: %d. Changed to: 1", defaultStreamingThreadsCount)
+		defaultStreamingThreadsCount = 1
+	}
 	logging.Infof("📝 Limit server.max_columns is %d", maxColumns)
 	destinationsFactory := storages.NewFactory(ctx, logEventPath, geoService, coordinationService, eventsCache, loggerFactory,
-		globalRecognitionConfiguration, metaStorage, eventsQueueFactory, maxColumns)
+		globalRecognitionConfiguration, metaStorage, eventsQueueFactory, maxColumns, defaultStreamingThreadsCount)
 
 	//DESTINATIONS
 	destinationsURL := viper.GetString(destinationsKey)
@@ -451,9 +462,16 @@ func main() {
 	}
 
 	//for now use the same interval as for log rotation
-	uploaderRunInterval := viper.GetInt("log.rotation_min")
+	uploaderRunInterval := viper.GetInt("batch_uploader.period_min")
+	if uploaderRunInterval <= 0 {
+		uploaderRunInterval = viper.GetInt("log.rotation_min")
+	}
 	//Uploader must read event logger directory
-	uploader, err := logfiles.NewUploader(logEventPath, uploaderFileMask, uploaderRunInterval, destinationsService)
+	uploaderThreadsCount := viper.GetInt("batch_uploader.threads_count")
+	if uploaderThreadsCount < 1 {
+		uploaderThreadsCount = 1
+	}
+	uploader, err := logfiles.NewUploader(logEventPath, uploaderFileMask, uploaderRunInterval, uploaderThreadsCount, destinationsService)
 	if err != nil {
 		logging.Fatal("Error while creating file uploader", err)
 	}
@@ -537,7 +555,7 @@ func main() {
 	logging.Fatal(server.ListenAndServe())
 }
 
-//initializeCoordinationService returns configured coordination.Service (redis or inmemory)
+// initializeCoordinationService returns configured coordination.Service (redis or inmemory)
 func initializeCoordinationService(ctx context.Context, metaStorageConfiguration *viper.Viper) (*coordination.Service, error) {
 	//check deprecated etcd
 	if viper.GetString("coordination.etcd.endpoint") != "" || viper.IsSet("synchronization_service") {
@@ -570,11 +588,7 @@ func initializeCoordinationService(ctx context.Context, metaStorageConfiguration
 		}
 
 		telemetry.Coordination("redis")
-		factory := meta.NewRedisPoolFactory(host,
-			coordinationRedisConfiguration.GetInt("port"),
-			coordinationRedisConfiguration.GetString("password"),
-			coordinationRedisConfiguration.GetBool("tls_skip_verify"),
-			coordinationRedisConfiguration.GetString("sentinel_master_name"))
+		factory := meta.NewRedisPoolFactory(host, coordinationRedisConfiguration.GetInt("port"), coordinationRedisConfiguration.GetString("password"), coordinationRedisConfiguration.GetInt("database"), coordinationRedisConfiguration.GetBool("tls_skip_verify"), coordinationRedisConfiguration.GetString("sentinel_master_name"))
 		factory.CheckAndSetDefaultPort()
 		return coordination.NewRedisService(ctx, appconfig.Instance.ServerName, factory)
 	}
@@ -583,7 +597,7 @@ func initializeCoordinationService(ctx context.Context, metaStorageConfiguration
 		"\n\tRead more about coordination service configuration: https://jitsu.com/docs/deployment/scale#coordination")
 }
 
-//initializeEventsQueueFactory returns configured events.QueueFactory (redis or inmemory)
+// initializeEventsQueueFactory returns configured events.QueueFactory (redis or inmemory)
 func initializeEventsQueueFactory(metaStorageConfiguration *viper.Viper) (*events.QueueFactory, error) {
 	var redisConfigurationSource *viper.Viper
 
@@ -601,11 +615,7 @@ func initializeEventsQueueFactory(metaStorageConfiguration *viper.Viper) (*event
 	var eventsQueueRedisPool *meta.RedisPool
 	var err error
 	if redisConfigurationSource != nil && redisConfigurationSource.GetString("host") != "" {
-		factory := meta.NewRedisPoolFactory(redisConfigurationSource.GetString("host"),
-			redisConfigurationSource.GetInt("port"),
-			redisConfigurationSource.GetString("password"),
-			redisConfigurationSource.GetBool("tls_skip_verify"),
-			redisConfigurationSource.GetString("sentinel_master_name"))
+		factory := meta.NewRedisPoolFactory(redisConfigurationSource.GetString("host"), redisConfigurationSource.GetInt("port"), redisConfigurationSource.GetString("password"), redisConfigurationSource.GetInt("database"), redisConfigurationSource.GetBool("tls_skip_verify"), redisConfigurationSource.GetString("sentinel_master_name"))
 		opts := meta.DefaultOptions
 		opts.MaxActive = 5000
 		factory.WithOptions(opts)

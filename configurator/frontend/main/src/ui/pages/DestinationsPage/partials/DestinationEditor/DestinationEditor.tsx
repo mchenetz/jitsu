@@ -16,7 +16,7 @@ import { DestinationEditorMappings } from "./DestinationEditorMappings"
 import { sourcesStore } from "stores/sources"
 import { destinationsStore } from "stores/destinations"
 // @CatalogDestinations
-import { destinationsReferenceMap } from "@jitsu/catalog"
+import { destinationsReferenceMap, DestinationType } from "@jitsu/catalog"
 // @Types
 import { FormInstance } from "antd/es"
 import { Destination } from "@jitsu/catalog"
@@ -43,6 +43,7 @@ import { currentPageHeaderStore } from "stores/currentPageHeader"
 import { connectionsHelper } from "stores/helpers"
 import { EntityNotFound } from "ui/components/EntityNotFound/EntityNotFound"
 import { DestinationsUtils } from "../../../../../utils/destinations.utils"
+import { handleError } from "../../../../../lib/components/components"
 
 type DestinationTabKey = "config" | "transform" | "mappings" | "sources" | "settings" | "statistics"
 
@@ -191,7 +192,7 @@ const DestinationEditor = ({
     params.standalone == "true" ||
     isOnboarding ||
     editorMode === "add" ||
-    (destinationsReferenceMap[destinationReference.id].defaultTransform.length > 0 &&
+    (destinationsReferenceMap[destinationReference.id].defaultTransform &&
       !destinationData.current._mappings?._mappings) ||
     !destinationData.current._mappings?._mappings
   let mappingForm = undefined
@@ -380,7 +381,9 @@ const DestinationEditor = ({
           }
 
           onAfterSaveSucceded ? onAfterSaveSucceded() : history.push(projectRoute(destinationPageRoutes.root))
-        } catch (errors) {}
+        } catch (errors) {
+          handleError(errors, "Saving failed")
+        }
       })
       .catch(() => {
         switchSavePopover(true)
